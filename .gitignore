@@ -1,0 +1,25 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Environment
+.venv/
+env/
+venv/
+
+# User data and temporary data
+userdata/
+temp_location/
+
+# IDE/editor settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# Static or generated content if unnecessary
+static/*
+
+# Optional: Logs
+*.log

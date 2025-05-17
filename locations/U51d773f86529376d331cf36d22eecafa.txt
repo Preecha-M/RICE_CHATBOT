@@ -1,0 +1,4 @@
+user_id: U51d773f86529376d331cf36d22eecafa
+latitude: 16.47571282256807
+longitude: 102.82526154454762
+address: FRGG+75X, Sila, Mueang Khon Kaen District, Khon Kaen 40000, Thailand
