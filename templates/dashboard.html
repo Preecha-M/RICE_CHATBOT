@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Admin Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen flex flex-col items-center p-8">
+    <div class="w-full max-w-7xl">
+        <h1 class="text-4xl font-extrabold text-center mb-8 text-blue-700">Admin Dashboard</h1>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <!-- Summary Box -->
+            <div class="bg-white p-6 rounded-lg shadow">
+                <h2 class="text-2xl font-semibold mb-4">สรุปข้อมูล</h2>
+                <div class="space-y-2">
+                    <p class="text-lg">จำนวนผู้ใช้ทั้งหมด: <span class="font-bold text-blue-600">{{ summary.total_users }}</span></p>
+                    <p class="text-lg">ตำแหน่งที่มีการรายงานมากที่สุด: <span class="font-bold text-blue-600">{{ summary.most_common_location }}</span></p>
+                </div>
+                <h3 class="text-xl font-semibold mt-6 mb-2">อัตราการเกิดโรค</h3>
+                <ul class="list-disc pl-6">
+                    {% for disease, count in summary.disease_summary.items() %}
+                    <li class="text-gray-700">{{ disease }}: <span class="font-semibold text-blue-600">{{ count }}</span> เคส</li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+<!-- Disease by Location Chart -->
+<div class="bg-white p-6 rounded-lg shadow">
+    <h2 class="text-2xl font-semibold mb-4">จำนวนเคสโรคตามสถานที่</h2>
+    <canvas id="locationChart" class="w-full h-64"></canvas>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            const ctx = document.getElementById('locationChart').getContext('2d');
+
+            const labels = [{% for loc in summary.location_list %}'{{ loc }}'{% if not loop.last %},{% endif %}{% endfor %}];
+            const datasets = [
+                {% for ds in summary.datasets_for_chart %}
+                {
+                    label: '{{ ds.label }}',
+                    data: [{{ ds.data | join(',') }}],
+                    backgroundColor: '{{ ds.backgroundColor }}',
+                    borderWidth: 1
+                }{% if not loop.last %},{% endif %}
+                {% endfor %}
+            ];
+
+            new Chart(ctx, {
+                type: 'bar',
+                data: { labels: labels, datasets: datasets },
+                options: {
+                    responsive: true,
+                    plugins: { tooltip: { mode: 'index', intersect: false }, legend: { position: 'top' } },
+                    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                    scales: { y: { beginAtZero: true } }
+                }
+            });
+        });
+    </script>
+</div>
+
+        <!-- Heatmap Section -->
+        <div class="bg-white p-6 rounded-lg shadow mb-8">
+            <h2 class="text-2xl font-semibold mb-4">Heatmap สถานที่เกิดโรค</h2>
+            <div id="heatmap" class="w-full h-96 rounded"></div>
+            <script>
+                document.addEventListener("DOMContentLoaded", function() {
+                    var heatmap = L.map('heatmap').setView([13.7563, 100.5018], 6); // Thailand Center
+                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                        attribution: '&copy; OpenStreetMap contributors'
+                    }).addTo(heatmap);
+
+                    var heatData = [
+                        {% for point in heat_data %}
+                        [{{ point[0] }}, {{ point[1] }}, {{ point[2] }}],
+                        {% endfor %}
+                    ];
+                    L.heatLayer(heatData, { radius: 25, blur: 15, maxZoom: 17 }).addTo(heatmap);
+                });
+            </script>
+        </div>
+
+        <!-- Table Box -->
+        <div class="bg-white p-6 rounded-lg shadow">
+            <h2 class="text-2xl font-semibold mb-4">รายละเอียดผู้ใช้</h2>
+            <div class="overflow-x-auto">
+                <table class="table-auto w-full border-collapse border border-gray-300 text-sm">
+                    <thead class="bg-gray-100 text-gray-700">
+                        <tr>
+                            <th class="border p-2">User ID</th>
+                            <th class="border p-2">Display Name</th>
+                            <th class="border p-2">Location</th>
+                            <th class="border p-2">Prediction</th>
+                            <th class="border p-2">Image</th>
+                            <th class="border p-2">Map</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for record in records %}
+                        <tr class="hover:bg-gray-50">
+                            <td class="border p-2">{{ record.user_id }}</td>
+                            <td class="border p-2">{{ record.display_name or 'ไม่พบชื่อ' }}</td>
+                            <td class="border p-2">{{ record.address }}</td>
+                            <td class="border p-2 whitespace-pre-line">{{ record.prediction }}</td>
+                            <td class="border p-2">
+                                {% if record.image_path %}
+                                <img src="/{{ record.image_path }}" class="w-24 h-24 object-cover rounded shadow">
+                                {% else %}
+                                <span class="text-gray-400 italic">ไม่มีรูป</span>
+                                {% endif %}
+                            </td>
+                            <td class="border p-2">
+                                <div id="map-{{ loop.index }}" class="w-64 h-40 rounded shadow"></div>
+                                <script>
+                                    var map = L.map('map-{{ loop.index }}').setView([{{ record.latitude }}, {{ record.longitude }}], 15);
+                                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                                        attribution: '&copy; OpenStreetMap contributors'
+                                    }).addTo(map);
+                                    L.marker([{{ record.latitude }}, {{ record.longitude }}]).addTo(map);
+                                </script>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

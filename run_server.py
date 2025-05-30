@@ -5,9 +5,25 @@ import json
 import sys
 import threading
 
+# เพิ่มฟังก์ชันอัปเดต Webhook
+def update_line_webhook(new_url):
+    LINE_CHANNEL_ACCESS_TOKEN = "KbjaeoEXCN1kHwF0t4nxC6ErPY+BGapJGFcf663laX180ksXTjaOJXtBo0VWk3Zw/YBSvg6cpHMZkBEOs55+J4PZIpKrntHkase5Xz/B0MMS5Bm3cezHztwMlzmP9vY6cKzwixqQQrrfxR2AWI+2QwdB04t89/1O/w1cDnyilFU="
+    headers = {
+        'Authorization': f'Bearer {LINE_CHANNEL_ACCESS_TOKEN}',
+        'Content-Type': 'application/json'
+    }
+    body = {
+        "endpoint": new_url + "/callback"
+    }
+    response = requests.put("https://api.line.me/v2/bot/channel/webhook/endpoint", headers=headers, json=body)
+    if response.status_code == 200:
+        print("✅ อัปเดต Webhook สำเร็จแล้ว!")
+    else:
+        print(f"❌ อัปเดต Webhook ไม่สำเร็จ: {response.text}")
+
 def run_uvicorn():
     # รัน FastAPI Server
-    subprocess.run(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
+    subprocess.run(["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"])
 
 def run_ngrok():
     # รัน ngrok http 8000
@@ -38,6 +54,9 @@ if __name__ == "__main__":
     if public_url:
         print("\n🚀 Server Ready!")
         print(f"📨 ใส่ Webhook URL นี้ใน LINE Developer: {public_url}/callback\n")
+        
+        # อัปเดต Webhook อัตโนมัติ
+        update_line_webhook(public_url)
     else:
         print("❌ ไม่เจอ ngrok URL")
 
