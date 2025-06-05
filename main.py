@@ -6,7 +6,8 @@ from linebot.models import (
     TemplateSendMessage, ButtonsTemplate, PostbackAction, PostbackEvent
 )
 from gradio_client import Client, handle_file
-from datetime import datetime
+from datetime import datetime, timedelta
+
 import os
 import json
 import uvicorn
@@ -27,6 +28,7 @@ user_pending_location_naming = {}
 # เก็บสถานะรอการจับคู่ "Image + Location" หลังส่งรูป
 user_pending_naming = {}
 
+
 # ========== FastAPI Callback ==========
 
 @app.post("/callback")
@@ -42,6 +44,15 @@ def handle_events(body, signature):
     except Exception as e:
         print(f"Handle error: {e}")
 
+def remove_expired_requests():
+    now = datetime.now()
+    expired_keys = []
+    for user_id, data in user_pending_location_request.items():
+        ts = datetime.fromisoformat(data["timestamp"])
+        if now - ts > timedelta(minutes=EXPIRY_MINUTES):
+            expired_keys.append(user_id)
+    for key in expired_keys:
+        del user_pending_location_request[key]
 # ========== Handler สำหรับ Location ==========
 
 @handler.add(MessageEvent, message=LocationMessage)
@@ -52,16 +63,15 @@ def handle_location(event):
     address = event.message.address
 
     save_temp_location(user_id, latitude, longitude, address)
-
-    # 📌 เก็บสถานะว่ากำลังรอให้ตั้งชื่อ Location
-    user_pending_location_naming[user_id] = True
+    update_location_in_userdata(user_id, latitude, longitude, address)
 
     line_bot_api.reply_message(
         event.reply_token,
         TextSendMessage(
-            text=f"✅ ได้รับตำแหน่งแล้ว\n📍 {address}\nละติจูด: {latitude}\nลองจิจูด: {longitude}\n\n📝 ต้องการตั้งชื่อสถานที่ไหม?\nถ้าใช่ พิมพ์ชื่อสถานที่ใหม่ ✏️\n(ถ้าไม่ต้องการ พิมพ์ 'ไม่ตั้งชื่อ')"
+            text=f"✅ ได้รับตำแหน่งแล้ว!\n📍 {address}\nละติจูด: {latitude}\nลองจิจูด: {longitude}\n\nระบบบันทึกพิกัดเรียบร้อยแล้วครับ ✅"
         )
     )
+
 
 def save_temp_location(user_id, latitude, longitude, address):
     os.makedirs("temp_location", exist_ok=True)
@@ -83,7 +93,55 @@ def save_temp_location(user_id, latitude, longitude, address):
     with open(filepath, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
 
+def save_direct_to_userdata(user_id, image_path, result):
+    os.makedirs("userdata", exist_ok=True)
+    save_path = f"userdata/{user_id}.json"
+
+    profile = line_bot_api.get_profile(user_id)
+    display_name = profile.display_name
+
+    record = {
+        "user_id": user_id,
+        "display_name": display_name,
+        "image_path": image_path,
+        "prediction": result,
+        "timestamp": datetime.now().isoformat(),
+        "address": "ไม่ระบุ",
+        "latitude": None,
+        "longitude": None
+    }
+
+    if os.path.exists(save_path):
+        with open(save_path, "r", encoding="utf-8") as f:
+            records = json.load(f)
+    else:
+        records = []
+
+    records.append(record)
+
+    with open(save_path, "w", encoding="utf-8") as f:
+        json.dump(records, f, indent=4, ensure_ascii=False)
+
+def update_location_in_userdata(user_id, latitude, longitude, address):
+    save_path = f"userdata/{user_id}.json"
+    if not os.path.exists(save_path):
+        return
+
+    with open(save_path, "r", encoding="utf-8") as f:
+        records = json.load(f)
+
+    if records:
+        records[-1]["latitude"] = latitude
+        records[-1]["longitude"] = longitude
+        records[-1]["address"] = address
+
+        with open(save_path, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=4, ensure_ascii=False)
+
 # ========== Handler สำหรับ Image ==========
+
+# เพิ่ม dict ใหม่
+user_pending_location_request = {}
 
 @handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
@@ -102,36 +160,45 @@ def handle_image(event):
         api_name="/predict"
     )
 
-    save_temp_prediction(user_id, image_path, result)
-    ask_user_to_select_location(user_id, event.reply_token)
+    # ✅ บันทึกไปยัง userdata เลยทันที
+    save_direct_to_userdata(user_id, image_path, result)
 
-def save_temp_prediction(user_id, image_path, result):
-    os.makedirs("temp_prediction", exist_ok=True)
-    filepath = f"temp_prediction/{user_id}.json"
+    # แจ้งผลและแนะนำส่ง location
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(
+            text=f"🔍 ผลการวิเคราะห์:\n{result}\n\n📍 ต้องการส่งตำแหน่งแปลงนาไหม?\nหากต้องการ โปรดส่ง Location มาต่อจากนี้\nหากไม่ต้องการ ระบบจะบันทึกข้อมูลตามภาพที่ส่งมาครับ"
+        )
+    )
 
-    # ดึงข้อมูลโปรไฟล์
-    profile = line_bot_api.get_profile(user_id)
-    display_name = profile.display_name
 
-    record = {
-        "user_id": user_id,
-        "display_name": display_name,
-        "image_path": image_path,
-        "prediction": result,
-        "timestamp": datetime.now().isoformat()
-    }
+# def save_temp_prediction(user_id, image_path, result):
+#     os.makedirs("temp_prediction", exist_ok=True)
+#     filepath = f"temp_prediction/{user_id}.json"
 
-    # โหลดข้อมูลเก่า ถ้ามี
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    else:
-        data = []
+#     # ดึงข้อมูลโปรไฟล์
+#     profile = line_bot_api.get_profile(user_id)
+#     display_name = profile.display_name
 
-    data.append(record)
+#     record = {
+#         "user_id": user_id,
+#         "display_name": display_name,
+#         "image_path": image_path,
+#         "prediction": result,
+#         "timestamp": datetime.now().isoformat()
+#     }
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+#     # โหลดข้อมูลเก่า ถ้ามี
+#     if os.path.exists(filepath):
+#         with open(filepath, "r", encoding="utf-8") as f:
+#             data = json.load(f)
+#     else:
+#         data = []
+
+#     data.append(record)
+
+#     with open(filepath, "w", encoding="utf-8") as f:
+#         json.dump(data, f, indent=4, ensure_ascii=False)
 
 def ask_user_to_select_location(user_id, reply_token):
     filepath = f"temp_location/{user_id}.json"
@@ -220,32 +287,32 @@ def handle_postback(event):
 
 # ========== Handler สำหรับรับข้อความ Text ==========
 
-@handler.add(MessageEvent, message=TextMessage)
-def handle_text(event):
-    user_id = event.source.user_id
-    user_text = event.message.text.strip()
+# @handler.add(MessageEvent, message=TextMessage)
+# def handle_text(event):
+#     user_id = event.source.user_id
+#     user_text = event.message.text.strip()
 
-    # ตั้งชื่อสถานที่ หลังส่ง Location
-    if user_id in user_pending_location_naming:
-        filepath = f"temp_location/{user_id}.json"
+#     # ตั้งชื่อสถานที่ หลังส่ง Location
+#     if user_id in user_pending_location_naming:
+#         filepath = f"temp_location/{user_id}.json"
 
-        if os.path.exists(filepath):
-            with open(filepath, "r", encoding="utf-8") as f:
-                locations = json.load(f)
+#         if os.path.exists(filepath):
+#             with open(filepath, "r", encoding="utf-8") as f:
+#                 locations = json.load(f)
 
-            if user_text not in ["ไม่ตั้งชื่อ", "ไม่", "no", "No"]:
-                locations[-1]["address"] = user_text  # แก้ไข address ของตำแหน่งล่าสุด
+#             if user_text not in ["ไม่ตั้งชื่อ", "ไม่", "no", "No"]:
+#                 locations[-1]["address"] = user_text  # แก้ไข address ของตำแหน่งล่าสุด
 
-            with open(filepath, "w", encoding="utf-8") as f:
-                json.dump(locations, f, indent=4, ensure_ascii=False)
+#             with open(filepath, "w", encoding="utf-8") as f:
+#                 json.dump(locations, f, indent=4, ensure_ascii=False)
 
-            reply = f"✅ ตั้งชื่อสถานที่เป็น: {user_text}" if user_text not in ["ไม่ตั้งชื่อ", "ไม่", "no", "No"] else "✅ ใช้ชื่อเดิมที่ LINE ส่งมา"
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text=reply)
-            )
+#             reply = f"✅ ตั้งชื่อสถานที่เป็น: {user_text}" if user_text not in ["ไม่ตั้งชื่อ", "ไม่", "no", "No"] else "✅ ใช้ชื่อเดิมที่ LINE ส่งมา"
+#             line_bot_api.reply_message(
+#                 event.reply_token,
+#                 TextSendMessage(text=reply)
+#             )
 
-        del user_pending_location_naming[user_id]
+#         del user_pending_location_naming[user_id]
 
 def save_final_userdata(user_id, reply_token):
     os.makedirs("userdata", exist_ok=True)
